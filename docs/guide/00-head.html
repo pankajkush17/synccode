@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SyncCode: a learning guide</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm 20mm 18mm; }
+  * { box-sizing: border-box; }
+  html { font-size: 10.4pt; }
+  body { margin: 0; font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; color: #15161c; line-height: 1.55; }
+  h1, h2, h3, h4 { line-height: 1.2; letter-spacing: -0.015em; margin: 0; }
+  h1 { font-size: 23pt; font-weight: 650; margin-bottom: 4mm; break-before: page; padding-top: 2mm; }
+  h1 .num { display: block; font-size: 10pt; font-weight: 600; color: #5b45f0; letter-spacing: 0.02em; margin-bottom: 2mm; }
+  h2 { font-size: 14.5pt; font-weight: 650; margin: 8mm 0 2.5mm; break-after: avoid; }
+  h3 { font-size: 11.5pt; font-weight: 650; margin: 5.5mm 0 1.5mm; break-after: avoid; }
+  p { margin: 0 0 2.6mm; }
+  ul, ol { margin: 0 0 3mm; padding-left: 5.5mm; }
+  li { margin-bottom: 1.1mm; }
+  strong { font-weight: 650; }
+  a { color: inherit; }
+  code { font-family: Menlo, "SF Mono", Consolas, monospace; font-size: 0.86em; background: #f1f1f5; border-radius: 3px; padding: 0.4pt 3pt; }
+  pre { font-family: Menlo, "SF Mono", Consolas, monospace; font-size: 8.3pt; line-height: 1.5; background: #f6f6f9; border: 0.6pt solid #e2e3ea; border-radius: 6px; padding: 3mm 3.5mm; margin: 0 0 3.5mm; white-space: pre-wrap; break-inside: avoid; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  pre.tree { font-size: 7.9pt; line-height: 1.45; }
+  .c { color: #7b7f8e; }
+  table { width: 100%; border-collapse: collapse; margin: 0 0 4mm; font-size: 9.2pt; break-inside: auto; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  th { text-align: left; font-weight: 650; background: #f1f1f5; padding: 1.8mm 2.2mm; border: 0.6pt solid #dfe0e7; }
+  td { padding: 1.8mm 2.2mm; border: 0.6pt solid #dfe0e7; vertical-align: top; }
+  td:first-child { white-space: nowrap; }
+  td.wrap:first-child, table.wrapfirst td:first-child { white-space: normal; }
+  .box { border-radius: 6px; padding: 3mm 4mm; margin: 0 0 4mm; break-inside: avoid; border-left: 3pt solid #5b45f0; background: #f4f2ff; }
+  .box > :last-child { margin-bottom: 0; }
+  .box b.t { display: block; font-size: 9pt; color: #5b45f0; margin-bottom: 1mm; }
+  .box.why { border-left-color: #0c8f6f; background: #eefaf6; } .box.why b.t { color: #0c8f6f; }
+  .box.try { border-left-color: #c2570c; background: #fff6ec; } .box.try b.t { color: #c2570c; }
+  .box.warn { border-left-color: #c2334d; background: #fff0f2; } .box.warn b.t { color: #c2334d; }
+  figure { margin: 2mm 0 5mm; break-inside: avoid; text-align: center; }
+  figure svg { max-width: 100%; height: auto; }
+  figcaption { font-size: 8.6pt; color: #5b5e69; margin-top: 1.5mm; }
+  svg text { white-space: pre; }
+  svg text { font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  .lead { font-size: 12pt; color: #3d4050; margin-bottom: 5mm; }
+  .cover { height: 250mm; display: flex; flex-direction: column; justify-content: center; }
+  .cover h1 { break-before: auto; font-size: 44pt; letter-spacing: -0.035em; line-height: 1.02; margin-bottom: 6mm; }
+  .cover p.sub { font-size: 15pt; color: #3d4050; max-width: 140mm; }
+  .cover .meta { margin-top: 18mm; font-size: 10pt; color: #5b5e69; }
+  .bars { display: flex; gap: 3mm; margin-bottom: 12mm; }
+  .bars i { width: 5mm; height: 26mm; border-radius: 3mm; display: block; }
+  .toc { columns: 2; column-gap: 10mm; font-size: 9.6pt; }
+  .toc div { break-inside: avoid; margin-bottom: 3.5mm; }
+  .toc b { display: block; margin-bottom: 0.8mm; }
+  .toc span { display: block; color: #5b5e69; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+  .steps { counter-reset: s; list-style: none; padding: 0; }
+  .steps > li { counter-increment: s; position: relative; padding-left: 9mm; margin-bottom: 2.6mm; }
+  .steps > li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 5.6mm; height: 5.6mm; border-radius: 50%; background: #15161c; color: #fff; font-size: 8pt; font-weight: 650; display: flex; align-items: center; justify-content: center; }
+  .small { font-size: 9pt; color: #5b5e69; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="bars"><i style="background:#8b7bff"></i><i style="background:#ff7a90"></i></div>
+  <h1>SyncCode<br>a learning guide</h1>
+  <p class="sub">Everything we built, explained from zero: the ideas, every folder and module, the databases, and how to run it on your own machine.</p>
+  <p class="meta">Real-time collaborative code editor &nbsp;·&nbsp; TypeScript, Next.js, Yjs, WebSockets, Redis, Postgres<br>Written for the project in <code>~/Documents/Pankaj Personal/syncCode</code></p>
+</section>
+
+<h1><span class="num">Before you start</span>How to read this guide</h1>
+<p class="lead">This guide assumes you know a little programming and nothing about real-time systems. It builds up in layers: first what the product does, then the ideas behind it, then the code, then the databases, and finally how to run it.</p>
+<p>You do not need to read it in one sitting. Parts 1 and 2 give you the mental model; if you only have an hour, read those. Parts 3 to 7 are the tour of the actual code and data. Part 10 is the setup checklist, which you can follow on its own.</p>
+<p>Three kinds of coloured boxes appear throughout:</p>
+<div class="box"><b class="t">In plain words</b>A short, jargon-free version of the idea that was just explained.</div>
+<div class="box why"><b class="t">Why it is built this way</b>The reasoning behind a design decision, the kind of thing an interviewer asks about.</div>
+<div class="box try"><b class="t">Try it</b>Something you can run on your machine to see the idea for yourself.</div>
+
+<h2>Contents</h2>
+<div class="toc">
+  <div><b>Part 1 · The big picture</b><span>What we built, why it is hard, the five ideas, one keystroke end to end</span></div>
+  <div><b>Part 2 · The concepts, from zero</b><span>HTTP and WebSockets, CRDTs and Yjs, state vectors, presence, Redis pub/sub</span></div>
+  <div><b>Part 3 · A tour of the repository</b><span>The monorepo, the folder tree, the tools</span></div>
+  <div><b>Part 4 · The shared packages</b><span><code>packages/shared</code> and <code>packages/db</code>, file by file</span></div>
+  <div><b>Part 5 · The sync server</b><span>Every class in <code>apps/sync</code> and how they fit together</span></div>
+  <div><b>Part 6 · The web app</b><span>Pages, hooks, stores, the editor, the components</span></div>
+  <div><b>Part 7 · The databases</b><span>Postgres tables, the write and read paths, compaction, migrations, Redis</span></div>
+  <div><b>Part 8 · The system in motion</b><span>Creating, joining, typing, reconnecting, scaling, shutting down, failing</span></div>
+  <div><b>Part 9 · Security, testing and operations</b><span>Share links, the test suites, metrics, Docker, CI</span></div>
+  <div><b>Part 10 · Running it on your machine</b><span>Step-by-step setup, daily commands, troubleshooting</span></div>
+  <div><b>Appendix</b><span>Protocol reference, configuration reference, glossary, what to study next</span></div>
+</div>

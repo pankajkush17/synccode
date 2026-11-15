@@ -1,0 +1,108 @@
+<h1><span class="num">Part 6</span>The web app</h1>
+<p class="lead"><code>apps/web</code> is a Next.js application. It has three pages, one API route, and a layer of code that keeps a WebSocket alive and a local document in step with the server.</p>
+
+<pre class="tree">apps/web/
+├── app/                        <span class="c">pages (the folder structure IS the URL structure)</span>
+│   ├── layout.tsx              <span class="c">wraps every page: fonts, theme, global CSS</span>
+│   ├── page.tsx                <span class="c">/              the landing page</span>
+│   ├── engineering/page.tsx    <span class="c">/engineering   how the backend works</span>
+│   ├── r/[slug]/page.tsx       <span class="c">/r/abc123…     the room, server part</span>
+│   ├── r/[slug]/RoomClient.tsx <span class="c">               the room, browser part</span>
+│   ├── api/rooms/route.ts      <span class="c">POST /api/rooms  forwards to the sync server</span>
+│   ├── not-found.tsx, error.tsx <span class="c">friendly failure pages</span>
+│   └── globals.css             <span class="c">colours and a few global styles</span>
+├── src/
+│   ├── realtime/               <span class="c">connection, document and presence logic</span>
+│   ├── editor/                 <span class="c">Monaco and its binding to Yjs</span>
+│   ├── stores/                 <span class="c">shared UI state (Zustand)</span>
+│   ├── components/             <span class="c">the visible pieces</span>
+│   ├── config/                 <span class="c">where the sync server lives</span>
+│   └── util/                   <span class="c">small pure helpers</span>
+├── e2e/                        <span class="c">browser tests (Playwright)</span>
+└── test/                       <span class="c">unit tests (Vitest)</span></pre>
+
+<h2>6.1 Server components and client components</h2>
+<p>In Next.js a component runs either on the server (producing HTML) or in the browser. A file that starts with <code>'use client'</code> runs in the browser and can use state, effects and WebSockets. Everything else runs on the server.</p>
+<p>The room page uses both. <code>page.tsx</code> runs on the server: it asks the sync server "does this room exist?" and shows a proper 404 page if not. If it does, it renders <code>RoomClient.tsx</code>, which runs in the browser and does all the live work.</p>
+
+<h2>6.2 <code>src/realtime/</code>: the live layer</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:27%">File</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>ConnectionManager.ts</code></td><td>A plain class (no React). It owns the WebSocket and implements the connection state machine below: connect, wait for <code>AUTH_ACK</code>, exchange state vectors, then relay updates both ways. It sends a ping every 5 seconds to measure latency, declares the link dead after 20 seconds of silence, and reconnects with growing delays.</td></tr>
+    <tr><td><code>ExponentialBackoff.ts</code></td><td>Computes the delay before each reconnect attempt: 0.5 s, 1 s, 2 s, 4 s … up to 15 s, with a little randomness so that a thousand clients dropped by one deploy do not all return in the same instant.</td></tr>
+    <tr><td><code>protocolCodec.ts</code></td><td>The browser's wrapper around the shared <code>Codec</code>, plus helpers to put a timestamp in a ping.</td></tr>
+    <tr><td><code>useYjsDoc.ts</code></td><td>A hook that creates the local Yjs document for a room and destroys it when you leave.</td></tr>
+    <tr><td><code>useAwareness.ts</code></td><td>Creates the awareness object, publishes your name and colour into it, and copies the list of people present into the presence store whenever it changes.</td></tr>
+    <tr><td><code>useConnection.ts</code></td><td>Starts a <code>ConnectionManager</code> when the component appears and stops it when it disappears. It is deliberately thin: the logic lives in the class.</td></tr>
+    <tr><td><code>useRoomSettings.ts</code></td><td>The room's language and title live in a shared map inside the Yjs document. This hook reads them into the editor store and returns functions to change them. Because they are part of the document, changing the language syncs to everyone and is saved, with no extra code.</td></tr>
+    <tr><td><code>useEditToken.ts</code></td><td>Reads the edit token from the part of the URL after <code>#</code>.</td></tr>
+    <tr><td><code>useLocalUser.ts</code></td><td>Your display name: a random friendly one on first visit, remembered in the browser, editable.</td></tr>
+  </tbody>
+</table>
+<figure>
+<svg viewBox="0 0 560 140" width="520">
+  <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#5b5e69"/></marker></defs>
+  <g font-size="11" font-family="Menlo, monospace" text-anchor="middle">
+    <rect x="6" y="14" width="64" height="30" rx="7" fill="#f6f6f9" stroke="#b9bbc6"/><text x="38" y="33">IDLE</text>
+    <rect x="118" y="14" width="112" height="30" rx="7" fill="#f6f6f9" stroke="#b9bbc6"/><text x="174" y="33">CONNECTING</text>
+    <rect x="288" y="14" width="90" height="30" rx="7" fill="#f6f6f9" stroke="#b9bbc6"/><text x="333" y="33">SYNCING</text>
+    <rect x="436" y="14" width="64" height="30" rx="7" fill="#ece9ff" stroke="#5b45f0"/><text x="468" y="33">OPEN</text>
+    <rect x="250" y="96" width="126" height="30" rx="7" fill="#fff6ec" stroke="#c2570c"/><text x="313" y="115">RECONNECTING</text>
+  </g>
+  <g fill="none" stroke="#5b5e69" stroke-width="1.3" marker-end="url(#a3)">
+    <path d="M72 29H116"/><path d="M232 29H286"/><path d="M380 29H434"/><path d="M468 46V111H378"/><path d="M248 111H174V46"/>
+  </g>
+  <g font-size="9.5" fill="#5b5e69"><text x="259" y="22" text-anchor="middle">auth-ack</text><text x="407" y="22" text-anchor="middle">step 2</text><text x="476" y="84">socket closed</text><text x="68" y="84">wait 0.5 s … 15 s</text></g>
+</svg>
+<figcaption>The connection state machine inside <code>ConnectionManager</code>.</figcaption>
+</figure>
+
+<h2>6.3 <code>src/editor/</code>: Monaco</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:27%">File</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>monacoSetup.ts</code></td><td>One-time setup: tells Monaco how to start its background workers, defines the light and dark colour themes, and turns off "cannot find module" errors (a shared scratch file has no project around it).</td></tr>
+    <tr><td><code>useMonacoEditor.ts</code></td><td>Creates one Monaco editor inside a <code>&lt;div&gt;</code> and disposes it on leaving. Changes of language, theme or read-only state are applied to the existing editor, so the cursor and scroll position are kept.</td></tr>
+    <tr><td><code>useYMonacoBridge.ts</code></td><td>Creates the <code>MonacoBinding</code> from the y-monaco library. This is the bridge: your keystrokes become Yjs operations, remote operations become editor edits, and selections travel through awareness.</td></tr>
+    <tr><td><code>EditorView.tsx</code></td><td>The component that puts those hooks together and reports the cursor position to the status bar.</td></tr>
+  </tbody>
+</table>
+
+<h2>6.4 <code>src/stores/</code>: shared state</h2>
+<p>A <em>store</em> is a small box of state that any component can read and that re-renders the component when the value changes. There are four:</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:27%">Store</th><th>Holds</th><th style="width:30%">Read by</th></tr></thead>
+  <tbody>
+    <tr><td><code>connectionStore</code></td><td>Connection state, latency, permission, which node you are on, any fatal error</td><td>Status bar, disconnect banner</td></tr>
+    <tr><td><code>editorStore</code></td><td>Current language, title, cursor position</td><td>Top bar, status bar, editor</td></tr>
+    <tr><td><code>presenceStore</code></td><td>The list of people in the room</td><td>Avatars, remote cursors</td></tr>
+    <tr><td><code>themeStore</code></td><td>Light or dark</td><td>Theme toggle, editor</td></tr>
+  </tbody>
+</table>
+
+<h2>6.5 <code>src/components/</code>: what you see</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:27%">Component</th><th>What it shows</th></tr></thead>
+  <tbody>
+    <tr><td><code>room/TopBar</code></td><td>Room title (editable), language picker, avatars, theme toggle, Share button</td></tr>
+    <tr><td><code>room/PeerAvatars</code></td><td>One animated circle per person; click your own to rename yourself</td></tr>
+    <tr><td><code>room/RemoteCursors</code></td><td>Generates the small stylesheet that gives each remote cursor its colour and name flag</td></tr>
+    <tr><td><code>room/StatusBar</code></td><td>Connected / reconnecting, latency, how many people, your node, cursor position</td></tr>
+    <tr><td><code>room/DisconnectBanner</code></td><td>Amber bar while reconnecting; red bar if the server refused you for good</td></tr>
+    <tr><td><code>share/ShareModal</code>, <code>QrCode</code></td><td>The two links (can edit, view only), copy buttons, QR codes</td></tr>
+    <tr><td><code>landing/*</code></td><td>Hero with the typing demo, features grid, three steps, closing call to action, footer</td></tr>
+    <tr><td><code>engineering/*</code></td><td>The animated keystroke diagram, the live two-document demo, the static figures</td></tr>
+    <tr><td><code>ui/*</code></td><td>Reusable building blocks: Button, Dialog, Tabs, Select, Tooltip, Popover</td></tr>
+  </tbody>
+</table>
+
+<h2>6.6 How the room page assembles itself</h2>
+<p><code>RoomClient.tsx</code> is short because each hook does one thing. In order:</p>
+<pre>const { ready, token } = useEditToken()          <span class="c">// read #t=… from the URL</span>
+const { name, rename } = useLocalUser()          <span class="c">// "Swift Otter"</span>
+const doc       = useYjsDoc(room.slug)           <span class="c">// an empty local document</span>
+const awareness = useAwareness(doc, name)        <span class="c">// presence, with my name in it</span>
+useConnection(wsUrl(slug, token), doc, awareness) <span class="c">// connect and keep in sync</span>
+const settings  = useRoomSettings(doc, room)     <span class="c">// language and title</span></pre>
+<p>Until the server has confirmed write permission, the editor is read-only. Until the first sync has finished, a "Joining room" placeholder is shown instead of an empty editor that would then jump.</p>

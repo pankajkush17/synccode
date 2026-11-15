@@ -1,0 +1,14 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Dependencies allowed to run install scripts. Everything else is blocked.
+allowBuilds:
+  esbuild: true
+  sharp: true
+  "@biomejs/biome": true
+  "@tailwindcss/oxide": true
+  # Optional native speed-ups pulled in by testcontainers; the JS fallbacks are fine.
+  cpu-features: false
+  ssh2: false
+  protobufjs: false

@@ -1,0 +1,120 @@
+<h1><span class="num">Appendix</span>Reference and glossary</h1>
+
+<h2>A. Wire protocol reference</h2>
+<p>Every WebSocket message: <code>type (1 byte) | roomRef (2 bytes, big-endian) | payload</code>.</p>
+<table>
+  <thead><tr><th>Type</th><th>Name</th><th>Direction</th><th>Payload</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td><code>SYNC_STEP_1</code></td><td>either</td><td>state vector</td></tr>
+    <tr><td>1</td><td><code>SYNC_STEP_2</code></td><td>reply</td><td>update (the diff)</td></tr>
+    <tr><td>2</td><td><code>UPDATE</code></td><td>either</td><td>update</td></tr>
+    <tr><td>3</td><td><code>AWARENESS</code></td><td>either</td><td>awareness update</td></tr>
+    <tr><td>4</td><td><code>AUTH_ACK</code></td><td>server → client</td><td>JSON <code>{ permission, nodeId }</code></td></tr>
+    <tr><td>5</td><td><code>ERROR</code></td><td>server → client</td><td>JSON <code>{ kind, message }</code></td></tr>
+    <tr><td>6</td><td><code>PING</code></td><td>client → server</td><td>8 bytes (send time)</td></tr>
+    <tr><td>7</td><td><code>PONG</code></td><td>server → client</td><td>the same 8 bytes</td></tr>
+  </tbody>
+</table>
+<table>
+  <thead><tr><th>Close code</th><th>Meaning</th><th>Client reaction</th></tr></thead>
+  <tbody>
+    <tr><td>1000 / 1001</td><td>Normal close / server going away</td><td>Reconnect</td></tr>
+    <tr><td>1013</td><td>Try again later (backpressure, room reloading)</td><td>Reconnect</td></tr>
+    <tr><td>4400</td><td>Protocol violation</td><td>Stop</td></tr>
+    <tr><td>4401</td><td>Invalid edit token</td><td>Stop</td></tr>
+    <tr><td>4404</td><td>No such room</td><td>Stop</td></tr>
+  </tbody>
+</table>
+
+<h2>B. HTTP API of the sync server</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:32%">Route</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>POST /rooms</code></td><td>Body <code>{ language?, title? }</code>. Returns <code>{ slug, editToken, language, title }</code> with status 201.</td></tr>
+    <tr><td><code>GET /rooms/:slug/meta</code></td><td>Returns <code>{ slug, language, title, createdAt, lastActiveAt }</code>, or 404.</td></tr>
+    <tr><td><code>GET /ws/:slug?t=token</code></td><td>WebSocket upgrade.</td></tr>
+    <tr><td><code>GET /healthz</code>, <code>/readyz</code>, <code>/metrics</code></td><td>Liveness, readiness, Prometheus metrics.</td></tr>
+  </tbody>
+</table>
+
+<h2>C. Configuration reference</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:34%">Variable</th><th style="width:16%">Default</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>DATABASE_URL</code></td><td>required</td><td>Where Postgres is</td></tr>
+    <tr><td><code>REDIS_URL</code></td><td>required</td><td>Where Redis is</td></tr>
+    <tr><td><code>EDIT_SECRET</code></td><td>required</td><td>32 bytes in hex; keys the stored token hashes</td></tr>
+    <tr><td><code>PORT</code></td><td>4000</td><td>Sync server port</td></tr>
+    <tr><td><code>NODE_NAME</code></td><td>part of the id</td><td>Label shown in logs and the status bar</td></tr>
+    <tr><td><code>ALLOWED_ORIGINS</code></td><td>*</td><td>Which websites may connect</td></tr>
+    <tr><td><code>RUN_MIGRATIONS</code></td><td>false</td><td>Apply migrations at start-up</td></tr>
+    <tr><td><code>FLUSH_INTERVAL_MS</code></td><td>500</td><td>How often edits are written to Postgres</td></tr>
+    <tr><td><code>IDLE_EVICTION_MS</code></td><td>300000</td><td>How long an empty room stays in memory</td></tr>
+    <tr><td><code>COMPACTION_INTERVAL_MS</code></td><td>60000</td><td>How often compaction runs</td></tr>
+    <tr><td><code>COMPACTION_THRESHOLD</code></td><td>1000</td><td>Rows before a room is compacted</td></tr>
+    <tr><td><code>HEARTBEAT_INTERVAL_MS</code></td><td>30000</td><td>Ping interval for dead-socket detection</td></tr>
+    <tr><td><code>MAX_BUFFERED_BYTES</code></td><td>4 MB</td><td>Backpressure limit per socket</td></tr>
+    <tr><td><code>NEXT_PUBLIC_SYNC_WS_URL</code></td><td>ws://localhost:4000</td><td>Where browsers open WebSockets (web app)</td></tr>
+    <tr><td><code>SYNC_HTTP_URL</code></td><td>http://localhost:4000</td><td>Where the web server calls the sync API</td></tr>
+  </tbody>
+</table>
+
+<h2>D. Glossary</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:24%">Term</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>Awareness</td><td>Yjs's mechanism for short-lived state such as cursors and names. Not saved.</td></tr>
+    <tr><td>Backpressure</td><td>What happens when a receiver is slower than the sender, and data piles up.</td></tr>
+    <tr><td>Capability</td><td>A secret that grants permission to whoever holds it, like a key.</td></tr>
+    <tr><td>Compaction</td><td>Replacing many small update rows with one snapshot.</td></tr>
+    <tr><td>Convergence</td><td>All copies ending up identical once they have seen the same edits.</td></tr>
+    <tr><td>CRDT</td><td>A data structure whose copies can always be merged automatically.</td></tr>
+    <tr><td>Debounce</td><td>Waiting briefly to batch many events into one action.</td></tr>
+    <tr><td>Dependency injection</td><td>Giving a class the objects it needs, rather than having it create them.</td></tr>
+    <tr><td>Echo suppression</td><td>A server ignoring its own message when the bus sends it back.</td></tr>
+    <tr><td>Eviction</td><td>Removing an idle room from a server's memory.</td></tr>
+    <tr><td>Fragment</td><td>The part of a URL after <code>#</code>. Never sent to servers.</td></tr>
+    <tr><td>HMAC</td><td>A fingerprint of a message that can only be produced with a secret key.</td></tr>
+    <tr><td>Horizontal scaling</td><td>Handling more load by adding more servers, not a bigger one.</td></tr>
+    <tr><td>Hydration</td><td>Rebuilding an in-memory object from stored data.</td></tr>
+    <tr><td>Idempotent</td><td>Doing it twice has the same effect as doing it once.</td></tr>
+    <tr><td>Migration</td><td>A versioned change to the database's structure.</td></tr>
+    <tr><td>Monorepo</td><td>One repository containing several related projects.</td></tr>
+    <tr><td>Origin (Yjs)</td><td>A label on a change saying where it came from.</td></tr>
+    <tr><td>Pub/sub</td><td>Publish/subscribe: senders post to a channel; all listeners receive.</td></tr>
+    <tr><td>Repository (pattern)</td><td>A class that owns all reads and writes for one table.</td></tr>
+    <tr><td>Slug</td><td>The short id of a room that appears in its URL.</td></tr>
+    <tr><td>Snapshot</td><td>The whole document stored as one update.</td></tr>
+    <tr><td>State vector</td><td>A compact summary of which edits a copy has seen.</td></tr>
+    <tr><td>Stateless server</td><td>A server whose memory is only a cache; it can be replaced at any time.</td></tr>
+    <tr><td>Tombstone</td><td>The marker left behind by a deleted item.</td></tr>
+    <tr><td>Update (Yjs)</td><td>A small block of bytes describing a change to a document.</td></tr>
+    <tr><td>WebSocket</td><td>A connection that stays open so both sides can send at any time.</td></tr>
+  </tbody>
+</table>
+
+<h2>E. A reading order for the code</h2>
+<p>If you want to read the source after this guide, this order builds understanding fastest:</p>
+<ol>
+  <li><code>packages/shared/src/protocol/Codec.ts</code> and <code>MessageType.ts</code> — the wire format, 60 lines.</li>
+  <li><code>apps/sync/src/testing/ProtocolClient.ts</code> — a complete client in 150 lines; the handshake in one place.</li>
+  <li><code>apps/sync/src/rooms/Room.ts</code> — the heart of the server.</li>
+  <li><code>apps/sync/src/rooms/RoomBroadcaster.ts</code> and <code>RoomManager.ts</code> — fan-out and lifecycle.</li>
+  <li><code>apps/sync/src/pubsub/RedisPubSub.ts</code> — the bus and echo suppression.</li>
+  <li><code>apps/sync/src/persistence/CompactionJob.ts</code> — the trickiest piece of database logic.</li>
+  <li><code>apps/sync/src/SyncServer.ts</code> — how everything is wired.</li>
+  <li><code>apps/sync/test/e2e-protocol/convergence.test.ts</code> — the proof.</li>
+  <li><code>apps/web/src/realtime/ConnectionManager.ts</code> — the browser side of the same protocol.</li>
+  <li><code>apps/web/app/r/[slug]/RoomClient.tsx</code> — how the page assembles it.</li>
+</ol>
+
+<h2>F. What to study next</h2>
+<ul>
+  <li>The Yjs documentation, especially the pages on the sync protocol and the awareness protocol.</li>
+  <li>The YATA paper: "Near Real-Time Peer-to-Peer Shared Editing on Extensible Data Types". Short and readable.</li>
+  <li>Martin Kleppmann's talk "CRDTs: The Hard Parts".</li>
+  <li>The Redis documentation page on pub/sub. One page, complete.</li>
+  <li>The project's own <code>docs/</code> folder: <code>architecture.md</code>, <code>crdt-notes.md</code>, <code>scaling-walkthrough.md</code>.</li>
+</ul>
+</body>
+</html>

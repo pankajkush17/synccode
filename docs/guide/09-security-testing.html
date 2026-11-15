@@ -1,0 +1,70 @@
+<h1><span class="num">Part 9</span>Security, testing and operations</h1>
+
+<h2>9.1 Share links without accounts</h2>
+<p>There is no user table and no login. Instead, <strong>holding the link is the permission</strong>. This idea is called a <em>capability</em>: like a key, whoever holds it may use it.</p>
+<p>A room has two links:</p>
+<pre>https://…/r/k3x9m2p7qa                      <span class="c">view only</span>
+https://…/r/k3x9m2p7qa#t=9SiOLqw77ML_C8o…   <span class="c">can edit</span></pre>
+<p>The part after <code>#</code> is called the URL <em>fragment</em>. Browsers never send the fragment to a web server. So the token does not appear in server logs, and is not leaked to other sites through the <code>Referer</code> header. The page reads it with JavaScript and passes it along when opening the WebSocket.</p>
+<h3>How the token is made</h3>
+<p>You need one concept: <strong>HMAC</strong>. An HMAC takes a secret key and a message, and produces a fixed-length fingerprint. Without the key you cannot produce the right fingerprint, and you cannot work backwards from the fingerprint to the key or the message.</p>
+<pre>roomSecret = 32 random bytes                              <span class="c">exists only for an instant</span>
+token      = base64url( HMAC(roomSecret, "edit:" + slug) )   <span class="c">sent to the creator, once</span>
+tokenHash  = hex( HMAC(EDIT_SECRET, slug + ":" + token) )    <span class="c">stored in rooms.edit_token_hash</span></pre>
+<ul>
+  <li>The token is effectively 256 random bits. It cannot be guessed.</li>
+  <li>The database holds only <code>tokenHash</code>. Someone who stole the database could not turn that back into working links, because computing the hash also needs <code>EDIT_SECRET</code>, which lives only in the server's environment.</li>
+  <li>To verify, the server recomputes the hash from the token it was given and compares. The comparison uses <code>timingSafeEqual</code>, which takes the same time whether the values match or not, so an attacker cannot learn anything by measuring response times.</li>
+</ul>
+<h3>Enforcement</h3>
+<ul>
+  <li>No token: the socket is marked <code>READ</code>. If it ever sends an <code>UPDATE</code> or <code>SYNC_STEP_2</code>, the server answers with an error and disconnects it. The read-only editor in the browser is a convenience; the real check is on the server.</li>
+  <li>Wrong token: refused outright, not quietly downgraded to read-only.</li>
+  <li>Names and colours that arrive from other users are treated as untrusted and cleaned before being shown.</li>
+  <li>The server only accepts WebSockets from the web origins listed in <code>ALLOWED_ORIGINS</code>.</li>
+</ul>
+
+<h2>9.2 The tests</h2>
+<p>There are three layers, from fast and narrow to slow and realistic.</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:20%">Layer</th><th>What it checks</th><th style="width:30%">Where</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Unit</strong></td><td>One class at a time, with fakes for everything else. Codec, envelope, tokens, backoff, the <code>Room</code> logic.</td><td><code>apps/sync/test/unit</code>, <code>apps/web/test</code>, <code>packages/shared/test</code></td></tr>
+    <tr><td><strong>Integration</strong></td><td>Classes against a real Postgres and a real Redis: repositories, hydration, compaction, pub/sub.</td><td><code>apps/sync/test/integration</code></td></tr>
+    <tr><td><strong>Protocol end-to-end</strong></td><td>Whole servers started inside the test, with browser-less clients (<code>ProtocolClient</code>) connecting over real WebSockets.</td><td><code>apps/sync/test/e2e-protocol</code></td></tr>
+    <tr><td><strong>Browser end-to-end</strong></td><td>Playwright drives real Chromium windows: two people in a room, view-only link, reload, share dialog.</td><td><code>apps/web/e2e</code></td></tr>
+  </tbody>
+</table>
+<p>The single most important file is <code>convergence.test.ts</code>. It starts <strong>two sync nodes</strong> sharing one Postgres and one Redis, connects one client to each, has both type at the same position a hundred times, and asserts that both clients <em>and</em> both servers end with identical text. That test is the horizontal-scaling claim, proven mechanically.</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:36%">Claim</th><th>How a test proves it</th></tr></thead>
+  <tbody>
+    <tr><td>Clients on different servers converge</td><td>The convergence test above.</td></tr>
+    <tr><td>Reconnecting costs a diff, not a replay</td><td>Drop a client from a 20 KB document, edit on both sides, reconnect: catch-up must be under 200 bytes.</td></tr>
+    <tr><td>A restart loses nothing</td><td>Type, shut the server down before the save timer fires, start a new one, read the text back.</td></tr>
+    <tr><td>Each edit is saved exactly once</td><td>5 edits via node A and 3 via node B must produce 5 and 3 rows.</td></tr>
+    <tr><td>Compaction is safe under load</td><td>Ten compactions racing ten writers; result compared exactly.</td></tr>
+    <tr><td>View-only really is view-only</td><td>A read socket forges write frames; both rejected, document unchanged.</td></tr>
+  </tbody>
+</table>
+
+<h2>9.3 Operations</h2>
+<h3>Health and metrics</h3>
+<div class="box try"><b class="t">Try it</b>With the server running:
+<pre>curl localhost:4000/healthz        <span class="c"># {"status":"ok","node":"…"}</span>
+curl localhost:4000/readyz         <span class="c"># checks Postgres and Redis</span>
+curl -s localhost:4000/metrics | grep synccode_   <span class="c"># live counters</span></pre></div>
+<p>Useful metrics: <code>synccode_ws_connections</code> (open sockets), <code>synccode_hot_rooms</code> (rooms in memory), <code>synccode_broadcast_latency_seconds</code>, <code>synccode_updates_persisted_total</code>, <code>synccode_room_hydration_seconds</code> (cold-start time).</p>
+<h3>The scripts</h3>
+<table class="wrapfirst">
+  <thead><tr><th style="width:24%">Command</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>pnpm seed</code></td><td>Creates three rooms with starter code and prints their edit and view links.</td></tr>
+    <tr><td><code>pnpm compact</code></td><td>Runs compaction for every room in the database, including rooms nobody has open. Safe to run while servers are live.</td></tr>
+    <tr><td><code>pnpm load-test</code></td><td>Connects 50 browser-less clients to one room, has them all type, and reports p50 / p95 / p99 delivery time and whether every copy ended identical.</td></tr>
+  </tbody>
+</table>
+<h3>Docker and the multi-node demo</h3>
+<p><code>docker/docker-compose.yml</code> describes six containers: Postgres, Redis, <code>sync-a</code>, <code>sync-b</code>, nginx, and the web app. <strong>nginx</strong> is a load balancer: it accepts connections on one address and hands each new one to the next sync node in turn ("round robin"). Open a room in two tabs and the status bar shows <code>Node sync-a</code> in one and <code>Node sync-b</code> in the other, yet both show the same document.</p>
+<h3>Continuous integration</h3>
+<p><code>.github/workflows/ci.yml</code> runs on every push: lint, type-check, all tests against real Postgres and Redis, a production build, then the browser tests. Only if everything passes on the main branch does it apply database migrations to production.</p>

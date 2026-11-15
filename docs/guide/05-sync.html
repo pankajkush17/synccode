@@ -1,0 +1,145 @@
+<h1><span class="num">Part 5</span>The sync server</h1>
+<p class="lead"><code>apps/sync</code> is the backend. It is about thirty small classes. This part goes through them folder by folder, then shows how they are wired together.</p>
+
+<pre class="tree">apps/sync/src/
+├── index.ts               <span class="c">the entry point: read settings, start the server</span>
+├── SyncServer.ts          <span class="c">builds every object and connects them ("composition root")</span>
+├── config/Config.ts       <span class="c">reads and validates environment variables</span>
+├── logging/Logger.ts      <span class="c">structured logs</span>
+├── errors/                <span class="c">the kinds of expected failure</span>
+├── identity/NodeIdentity.ts   <span class="c">this server's unique id</span>
+├── auth/                  <span class="c">edit tokens and permissions</span>
+├── http/                  <span class="c">ordinary web routes</span>
+├── ws/                    <span class="c">WebSocket connections</span>
+├── rooms/                 <span class="c">documents held in memory</span>
+├── pubsub/                <span class="c">talking to other servers through Redis</span>
+├── persistence/           <span class="c">talking to Postgres</span>
+├── metrics/MetricsRegistry.ts <span class="c">counters and timings</span>
+├── lifecycle/GracefulShutdown.ts <span class="c">stopping without losing data</span>
+└── testing/ProtocolClient.ts  <span class="c">a browser-less client used by tests and scripts</span></pre>
+
+<h2>5.1 The foundations</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:23%">Class</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>Config</code></td><td>The only place environment variables are read. A Zod schema checks them all at start-up. If something is missing or malformed, the server refuses to start and prints exactly which variable is wrong. Everything else asks <code>config.databaseUrl</code>, <code>config.flushIntervalMs</code> and so on, already typed.</td></tr>
+    <tr><td><code>Logger</code></td><td>A thin wrapper around Pino. <code>logger.child({ roomSlug })</code> returns a logger that adds that context to every line. It automatically hides anything named <code>token</code> or <code>url</code>, so edit tokens cannot leak into logs.</td></tr>
+    <tr><td><code>DomainError</code> and its children</td><td>Expected failures, each with a machine-readable <code>kind</code> and an HTTP status: <code>NotFoundError</code> (404), <code>UnauthorizedError</code> (401), <code>ProtocolError</code> (400), <code>ValidationError</code> (400). Code throws these; one place turns them into responses.</td></tr>
+    <tr><td><code>NodeIdentity</code></td><td>Generates one random id (a UUID) when the process starts. It is stamped on every Redis message for echo suppression, and its short name appears in the editor's status bar.</td></tr>
+    <tr><td><code>MetricsRegistry</code></td><td>Holds every counter and timer: open connections, rooms in memory, messages by type, broadcast latency, flush duration, compactions, and more.</td></tr>
+  </tbody>
+</table>
+
+<h2>5.2 <code>auth/</code>: who may edit</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:23%">File</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>Permission.ts</code></td><td>Two values: <code>READ</code> and <code>WRITE</code>.</td></tr>
+    <tr><td><code>TokenService.ts</code></td><td><code>mintEditToken(slug)</code> creates a new token and the hash to store. <code>verifyEditToken(slug, token, hash)</code> checks a token in constant time. Part 9 explains the cryptography.</td></tr>
+  </tbody>
+</table>
+
+<h2>5.3 <code>http/</code>: the ordinary routes</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:23%">Class</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>HttpServer</code></td><td>Creates the Hono app, adds logging, CORS and a body-size limit, mounts the routes, and listens on the port. When a request asks to upgrade to a WebSocket, it hands the request to the <code>WebSocketGateway</code>.</td></tr>
+    <tr><td><code>RoomsRoutes</code></td><td><code>POST /rooms</code> creates a room and returns its slug and edit token (the only time the token is ever sent). <code>GET /rooms/:slug/meta</code> returns the room's language and title.</td></tr>
+    <tr><td><code>HealthRoutes</code></td><td><code>/healthz</code>: "the process is alive". <code>/readyz</code>: "Postgres and Redis answer, and I am not shutting down". Load balancers use the second to decide whether to send traffic.</td></tr>
+    <tr><td><code>MetricsRoutes</code></td><td><code>/metrics</code> in the Prometheus text format.</td></tr>
+    <tr><td><code>RequestLogger</code></td><td>One log line per HTTP request, path only (never the query string).</td></tr>
+    <tr><td><code>ErrorHandler</code></td><td>Turns any thrown error into <code>{ status: "error", kind, message }</code>. Unknown errors are logged in full but reveal nothing to the caller.</td></tr>
+  </tbody>
+</table>
+
+<h2>5.4 <code>ws/</code>: the WebSocket layer</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:23%">Class</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>WebSocketGateway</code></td><td>The front door. For a request to <code>/ws/&lt;slug&gt;?t=&lt;token&gt;</code> it checks the path and the browser origin, asks the <code>RoomManager</code> for the room, decides the permission (no token: read; valid token: write; wrong token: refused), completes the upgrade, and creates a <code>RoomSession</code>.</td></tr>
+    <tr><td><code>RoomSession</code></td><td>One object per connected browser. It decodes each incoming frame and routes it: sync messages and updates to the <code>Room</code>, pings answered directly. It enforces permission: an update from a read-only socket gets an <code>ERROR</code> frame and is disconnected. It also remembers which cursors this socket introduced, so they can be removed when it leaves.</td></tr>
+    <tr><td><code>MessageCodec</code></td><td>The server's wrapper around the shared <code>Codec</code>; converts decoding failures into <code>ProtocolError</code>.</td></tr>
+    <tr><td><code>HeartbeatManager</code></td><td>Every 30 seconds it pings every socket. A socket that did not answer the previous ping is terminated. Without this, a laptop that went to sleep would stay "connected" forever.</td></tr>
+    <tr><td><code>BackpressureGuard</code></td><td>Before each send, checks how many bytes are waiting to go out to that socket. If a slow client has more than 4 MB queued, it is disconnected. It loses nothing: on reconnect it catches up with one diff.</td></tr>
+  </tbody>
+</table>
+
+<h2>5.5 <code>rooms/</code>: documents in memory</h2>
+<p>This folder is the core of the server.</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:23%">Class</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>Room</code></td><td>One collaborative document, live in this server's memory. It owns the Yjs document and the awareness object, the set of sessions attached to it, and a list of updates not yet saved (the "dirty set"). It applies incoming changes, answers sync requests, and schedules saves.</td></tr>
+    <tr><td><code>RoomManager</code></td><td>A map from slug to <code>Room</code>. <code>get(slug)</code> returns the room if it is already in memory; otherwise it loads it. If fifty people ask for the same cold room at once, they share one load. When a room has had no connections for five minutes, it is saved and removed from memory ("evicted").</td></tr>
+    <tr><td><code>RoomHydrator</code></td><td>Rebuilds a document from Postgres: apply the latest snapshot, then every update row after it. "Hydrate" means "fill an empty object with its saved data".</td></tr>
+    <tr><td><code>RoomBroadcaster</code></td><td>Fan-out. Given a change, send it to the sockets on this server and, if it originated here, publish it to Redis.</td></tr>
+    <tr><td><code>UpdateOrigin</code></td><td>Two markers, <code>REDIS</code> and <code>HYDRATE</code>, used to label where a change came from.</td></tr>
+    <tr><td><code>SlugGenerator</code></td><td>Makes random 10-character room ids.</td></tr>
+  </tbody>
+</table>
+<h3>The origin rule</h3>
+<p>Every change applied to a Yjs document carries a label called its <em>origin</em>. In this server the origin is either the <code>RoomSession</code> the change came from, or one of the two markers. That single label decides everything that happens next:</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:30%">The change came from…</th><th>Send to local sockets?</th><th>Publish to Redis?</th><th>Save to Postgres?</th></tr></thead>
+  <tbody>
+    <tr><td>a browser on this server</td><td>Yes, all except the sender</td><td>Yes</td><td>Yes</td></tr>
+    <tr><td>another server, via Redis</td><td>Yes, all</td><td>No (it would loop)</td><td>No (the other server saves it)</td></tr>
+    <tr><td>Postgres, while loading</td><td>Nobody is attached yet</td><td>No</td><td>No (it is already there)</td></tr>
+  </tbody>
+</table>
+<div class="box why"><b class="t">Why it is built this way</b>Every edit reaches every server, but it <em>originates</em> on exactly one: the server the typing user is connected to. If only the originating server saves it, each edit is written to the database exactly once, with no leader election and no locks.</div>
+
+<h2>5.6 <code>pubsub/</code>: talking to the other servers</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:23%">File</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>RedisPubSub</code></td><td>Owns two Redis connections, because a connection that has subscribed cannot do anything else: one to publish, one to listen. It wraps outgoing messages in an envelope, drops incoming messages carrying its own id, and hands the rest to the right room. It also notices when the listening connection was lost and restored.</td></tr>
+    <tr><td><code>MessageEnvelope</code></td><td>The layout of a Redis message: 16 bytes of node id, 1 byte of kind, then the payload. Kinds are <code>update</code>, <code>awareness</code> and <code>sync-request</code>.</td></tr>
+    <tr><td><code>RoomChannels</code></td><td>Builds channel names like <code>room:&lt;slug&gt;:updates</code> and parses them back.</td></tr>
+    <tr><td><code>RoomBus</code></td><td>An <em>interface</em>: the three operations rooms need (subscribe, unsubscribe, publish). The real implementation is <code>RedisPubSub</code>; tests swap in a fake that needs no Redis.</td></tr>
+  </tbody>
+</table>
+
+<h2>5.7 <code>persistence/</code>: talking to Postgres</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:23%">Class</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>Database</code></td><td>Holds the connection pool; offers <code>transaction()</code>, <code>ping()</code>, <code>migrate()</code> and <code>close()</code>.</td></tr>
+    <tr><td><code>RoomRepository</code></td><td>The <code>rooms</code> table: create a room, find one by slug, update its "last active" time and settings.</td></tr>
+    <tr><td><code>UpdateRepository</code></td><td>The <code>document_updates</code> table: append a batch, read rows back in order in pages of 500, count them, delete up to an id.</td></tr>
+    <tr><td><code>SnapshotRepository</code></td><td>The <code>document_snapshots</code> table: find the latest, insert a new one, remove the old ones.</td></tr>
+    <tr><td><code>CompactionJob</code></td><td>Every 60 seconds, for each room in memory with more than 1,000 update rows, folds the rows into one snapshot. Explained step by step in Part 7.</td></tr>
+  </tbody>
+</table>
+<p>A <em>repository</em> is a class whose only job is to read and write one table. The rest of the code calls <code>updates.appendBatch(...)</code> and never writes SQL.</p>
+
+<h2>5.8 <code>lifecycle/GracefulShutdown.ts</code></h2>
+<p>When the operating system asks the server to stop (the <code>SIGTERM</code> signal, sent on every deploy), this class runs an ordered teardown so that no edit is lost:</p>
+<ol class="steps">
+  <li>Stop accepting: <code>/readyz</code> starts answering 503 and new WebSockets are refused.</li>
+  <li>Stop the background timers (compaction, heartbeat).</li>
+  <li>Close every socket with code 1001, "going away", and save every room that has unsaved edits. The browsers will reconnect to another server.</li>
+  <li>Disconnect from Redis, then from Postgres.</li>
+  <li>Release the network port and exit.</li>
+</ol>
+<p>If this takes longer than 25 seconds, the process exits anyway, just before the platform would kill it at 30.</p>
+
+<h2>5.9 How it is all wired: <code>SyncServer.ts</code></h2>
+<p><code>index.ts</code> is five lines: read the config, create a <code>SyncServer</code>, install the shutdown handler, call <code>start()</code>. <code>SyncServer</code> is the one place that knows about every class. Its constructor creates each object once and passes it to the objects that need it:</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:26%">This object…</th><th>…is given these</th></tr></thead>
+  <tbody>
+    <tr><td><code>Database</code></td><td>the database address from <code>Config</code></td></tr>
+    <tr><td>the three repositories</td><td><code>Database</code></td></tr>
+    <tr><td><code>RoomHydrator</code></td><td><code>SnapshotRepository</code>, <code>UpdateRepository</code></td></tr>
+    <tr><td><code>RedisPubSub</code></td><td>the Redis address, <code>NodeIdentity</code>, <code>Logger</code>, <code>MetricsRegistry</code></td></tr>
+    <tr><td><code>RoomBroadcaster</code></td><td><code>RedisPubSub</code></td></tr>
+    <tr><td><code>RoomManager</code></td><td><code>RoomRepository</code>, <code>RoomHydrator</code>, <code>RoomBroadcaster</code>, <code>UpdateRepository</code>, <code>RedisPubSub</code></td></tr>
+    <tr><td><code>CompactionJob</code></td><td><code>Database</code>, the snapshot and update repositories, <code>RoomHydrator</code>, and the list of rooms in memory from <code>RoomManager</code></td></tr>
+    <tr><td><code>WebSocketGateway</code></td><td><code>RoomManager</code>, <code>TokenService</code>, <code>MessageCodec</code>, <code>HeartbeatManager</code>, <code>NodeIdentity</code></td></tr>
+    <tr><td><code>HttpServer</code></td><td>the three route classes and the <code>WebSocketGateway</code></td></tr>
+    <tr><td><code>GracefulShutdown</code></td><td><code>HttpServer</code>, <code>RoomManager</code>, and the stop functions of the compaction job, heartbeat, Redis and database</td></tr>
+  </tbody>
+</table>
+<p>This pattern is called <strong>dependency injection</strong>: a class does not create the things it depends on; it is given them. The pay-off is in testing. A test can build a <code>Room</code> with a fake database and a fake bus and check its behaviour in a millisecond. And because one <code>SyncServer</code> object is one complete node, the most important test in the project simply creates <em>two</em> of them in the same process.</p>
+<p><code>start()</code> does things in a safe order: optionally apply migrations, check Postgres answers, connect to Redis, start listening, start the heartbeat and compaction timers.</p>

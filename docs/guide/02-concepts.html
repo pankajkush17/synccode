@@ -1,0 +1,95 @@
+<h1><span class="num">Part 2</span>The concepts, from zero</h1>
+<p class="lead">Five concepts carry the whole project. Each is explained here without assuming you have met it before.</p>
+
+<h2>2.1 HTTP and WebSockets</h2>
+<p><strong>HTTP</strong> is how browsers normally talk to servers. The browser sends a <em>request</em> ("give me this page"), the server sends a <em>response</em>, and the exchange is over. The server can never start a conversation.</p>
+<p>A <strong>WebSocket</strong> starts as an ordinary HTTP request that says "I would like to upgrade". If the server agrees, the same network connection stays open, and from then on either side can send a message at any time. Messages can be text or raw bytes (<em>binary</em>). SyncCode uses binary messages only, because the document updates are already compact binary and wrapping them in text would make them bigger and slower.</p>
+<table>
+  <thead><tr><th></th><th>HTTP</th><th>WebSocket</th></tr></thead>
+  <tbody>
+    <tr><td>Who can speak</td><td>Browser asks, server answers</td><td>Either side, any time</td></tr>
+    <tr><td>Connection</td><td>Closed after each exchange</td><td>Stays open for minutes or hours</td></tr>
+    <tr><td>Used in SyncCode for</td><td>Creating a room, loading pages, health checks</td><td>Every edit and every cursor movement</td></tr>
+  </tbody>
+</table>
+<p>A long-lived connection brings new problems that HTTP never had: it can die silently (a laptop lid closes), one side can be too slow to keep up, and it must be re-established after a drop. Part 5 shows the classes that handle each of those.</p>
+
+<h2>2.2 CRDTs: a document that merges itself</h2>
+<p>CRDT stands for <em>Conflict-free Replicated Data Type</em>. Take the words one at a time:</p>
+<ul>
+  <li><strong>Replicated</strong>: there are many copies (replicas) of the data, one in each browser and one in each server.</li>
+  <li><strong>Data type</strong>: here, a piece of text.</li>
+  <li><strong>Conflict-free</strong>: any two copies can always be merged automatically, with no "your version or mine?" question.</li>
+</ul>
+<p>The older approach, used by early Google Docs, is called <em>operational transformation</em>: one central server receives every edit and rewrites it to account for edits it raced with. It works, but everything must pass through that one clever server, and the rewriting rules are famously hard to get right. A CRDT moves the cleverness into the data itself, so the server can be simple. In SyncCode the server never looks inside an edit. It stores bytes and forwards bytes.</p>
+
+<h3>How Yjs represents text</h3>
+<p>We use a library called <strong>Yjs</strong>. Its algorithm is known as YATA. In Yjs, text is not a string. It is a chain of <strong>items</strong>, where an item is one or more characters plus some bookkeeping:</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:22%">Field</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>id</code></td><td>A pair <code>(clientID, clock)</code>. <code>clientID</code> is a random number each copy of the document picks for itself. <code>clock</code> counts how many characters that client has inserted so far. Together they are unique in the whole world, without asking anybody.</td></tr>
+    <tr><td><code>origin</code></td><td>The id of the item that was immediately to the <em>left</em> when this one was typed.</td></tr>
+    <tr><td><code>rightOrigin</code></td><td>The id of the item immediately to the <em>right</em> at that moment.</td></tr>
+    <tr><td><code>content</code></td><td>The characters themselves.</td></tr>
+  </tbody>
+</table>
+<p>The key shift: an insertion does <strong>not</strong> say "put x at position 5". Positions change as other people type. It says "put x between <em>these two specific items</em>", and item ids never change.</p>
+
+<h3>The conflict, solved</h3>
+<p>Back to the example. The text is <code>A B</code>. You (client 7) and your friend (client 9) both insert between A and B at the same time.</p>
+<pre>You:     item (7, 0)  content "x"   origin = A   rightOrigin = B
+Friend:  item (9, 0)  content "y"   origin = A   rightOrigin = B</pre>
+<p>Both items claim the same gap. YATA's rule for this is fixed and simple: when two items have the same origin, order them by <code>clientID</code>. Every copy of the document applies the same rule to the same two ids, so every copy puts them in the same order. That one deterministic tie-break is what makes the whole thing converge. It is a mathematical property of the algorithm, not something that works "most of the time".</p>
+<div class="box try"><b class="t">Try it</b>Open <code>http://localhost:3000/engineering</code> and scroll to "Why edits never conflict". Two real Yjs documents run in the page. Press <strong>Both type at the same spot</strong>, watch the two boxes differ, then press <strong>Reconnect</strong>.</div>
+
+<h3>Deleting</h3>
+<p>If deleting removed an item entirely, a friend's insertion that named it as its <code>origin</code> would have nothing to attach to. So a delete only <em>marks</em> the item as deleted (a "tombstone"). The characters are discarded to save space; a small marker stays. One consequence: a Yjs document's size reflects its history, not only its current text.</p>
+
+<h3>Updates: the unit that travels</h3>
+<p>Whenever a document changes, Yjs can describe the change as an <strong>update</strong>: a small block of bytes. Updates have three properties the entire backend relies on:</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:20%">Property</th><th>Meaning</th><th style="width:38%">What it lets us do</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Idempotent</strong></td><td>Applying the same update twice changes nothing the second time.</td><td>We never have to worry about duplicates. Two servers can both apply the same update safely.</td></tr>
+    <tr><td><strong>Commutative</strong></td><td>Applying updates in any order gives the same document.</td><td>Messages may arrive out of order. If one arrives before something it depends on, Yjs holds it until the missing piece shows up.</td></tr>
+    <tr><td><strong>Mergeable</strong></td><td>Many updates can be combined into one that means the same.</td><td>We can squash a long history into one snapshot (Part 7).</td></tr>
+  </tbody>
+</table>
+<p>In code, the whole API we need is four functions:</p>
+<pre>Y.applyUpdate(doc, update)                 <span class="c">// merge an update into a document</span>
+Y.encodeStateAsUpdate(doc)                 <span class="c">// the whole document as one update</span>
+Y.encodeStateVector(doc)                   <span class="c">// "what I have" (next section)</span>
+Y.encodeStateAsUpdate(doc, stateVector)    <span class="c">// only what the owner of that vector is missing</span></pre>
+
+<h2>2.3 State vectors: catching up cheaply</h2>
+<p>Suppose you were offline for ten minutes and your friends made 10,000 edits. Resending the whole document, or replaying 10,000 messages, would be wasteful. Yjs has a neat answer.</p>
+<p>A <strong>state vector</strong> is a short list that says, for each client, how many of their characters you have seen:</p>
+<pre>Your state vector:      client 7 → 41     client 9 → 17
+The server's:           client 7 → 41     client 9 → 60     client 12 → 8</pre>
+<p>Comparing the two, the server knows exactly what you lack: client 9's items numbered 17 to 59, and all eight of client 12's. It packs just those into one update and sends it. The conversation is two messages:</p>
+<pre>you → server    SYNC_STEP_1   "here is my state vector"
+server → you    SYNC_STEP_2   "here is exactly what you are missing"</pre>
+<p>Then the same thing happens in the other direction, so anything you typed while offline reaches the server. The cost depends on how much was missed, never on how big the document is or how long you were away. One of our tests proves this: a client that drops off a 20,000-character document and comes back receives a catch-up message of under 200 bytes.</p>
+<div class="box"><b class="t">In plain words</b>Instead of asking "send me everything", you say "I have read up to page 41 of Alice's notes and page 17 of Bob's". The reply contains only the pages after those.</div>
+<div class="box why"><b class="t">Why it is built this way</b>Notice that nothing is queued while you are offline. Your local document already contains your offline edits; the state-vector exchange finds and sends them. "The document is the queue" removes a whole category of bugs.</div>
+
+<h2>2.4 Awareness: cursors and presence</h2>
+<p>Where your cursor is, what you have selected, your name and your colour are not part of the document. Nobody needs yesterday's cursor position. Yjs handles this with a separate, simpler mechanism called <strong>awareness</strong>:</p>
+<ul>
+  <li>Each client owns exactly one entry, a small JSON object such as <code>{ user: { name, color }, selection: {…} }</code>.</li>
+  <li>When you change it, the new version replaces the old one everywhere (last write wins). No merging is needed.</li>
+  <li>Every client re-announces its entry every 15 seconds. An entry not refreshed for 30 seconds is dropped. So someone who vanishes without saying goodbye still disappears from everyone's screen.</li>
+  <li>It is <strong>never saved to the database</strong>.</li>
+</ul>
+<p>Cursor positions are stored as "next to this item", not "at index 12", so your cursor stays attached to the right character while other people type before it.</p>
+
+<h2>2.5 Redis pub/sub: how servers talk to each other</h2>
+<p><strong>Redis</strong> is an in-memory data store. We use exactly one of its features: <em>publish/subscribe</em>. A program can <code>SUBSCRIBE</code> to a named channel; any program can <code>PUBLISH</code> a message to that channel; every subscriber receives it immediately. Redis does not keep the message. If nobody is listening, it is gone.</p>
+<p>Each room gets two channels, named after the room's id (its <em>slug</em>):</p>
+<pre>room:k3x9m2p7qa:updates      <span class="c">document updates (and requests to catch up)</span>
+room:k3x9m2p7qa:awareness    <span class="c">cursor and presence changes</span></pre>
+<p>A sync node subscribes to a room's channels when the first user of that room connects to it, and unsubscribes when the room goes idle.</p>
+<h3>The echo problem</h3>
+<p>When node A publishes an update, Redis delivers it to all subscribers, and node A is one of them. If A treated its own message as news, it would apply it and publish it again, forever. The fix is a label. Every node picks a random id when it starts. Every message it publishes begins with that id. On receiving a message, a node looks at the label first, and drops the message if the label is its own. This is called <strong>echo suppression</strong>.</p>
+<div class="box why"><b class="t">Why it is built this way</b>Redis also has "Streams", which remember messages. We deliberately use plain pub/sub, which forgets, because permanent storage is Postgres's job. The bus only has to make live servers agree right now. Anything a server misses can be recovered with a state-vector exchange, as Part 8 shows.</div>

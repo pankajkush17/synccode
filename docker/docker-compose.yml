@@ -1,0 +1,98 @@
+# Local multi-node demo:  nginx (round-robin) → sync-a + sync-b → redis + postgres, plus the web UI.
+#
+#   docker compose -f docker/docker-compose.yml up --build
+#   open http://localhost:3000
+#
+# Open one room in two tabs: the status bar shows which node each tab landed on.
+
+name: synccode
+
+x-sync: &sync
+  build:
+    context: ..
+    dockerfile: apps/sync/Dockerfile
+  environment: &sync-env
+    DATABASE_URL: postgres://synccode:synccode@postgres:5432/synccode
+    REDIS_URL: redis://redis:6379
+    # Demo value only. Generate your own for anything real:  openssl rand -hex 32
+    EDIT_SECRET: ${EDIT_SECRET:-5ad1c0de5ad1c0de5ad1c0de5ad1c0de5ad1c0de5ad1c0de5ad1c0de5ad1c0de}
+    PORT: "4000"
+    LOG_LEVEL: info
+    ALLOWED_ORIGINS: http://localhost:3000
+  # Kubernetes-style: SIGTERM, then 30s to flush before SIGKILL.
+  stop_grace_period: 30s
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: synccode
+      POSTGRES_PASSWORD: synccode
+      POSTGRES_DB: synccode
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synccode -d synccode"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  sync-a:
+    <<: *sync
+    environment:
+      <<: *sync-env
+      NODE_NAME: sync-a
+      # Exactly one node applies migrations; the other waits for it to be healthy.
+      RUN_MIGRATIONS: "true"
+    ports:
+      - "4001:4000" # direct access, bypassing the load balancer
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  sync-b:
+    <<: *sync
+    environment:
+      <<: *sync-env
+      NODE_NAME: sync-b
+    ports:
+      - "4002:4000"
+    depends_on:
+      sync-a: { condition: service_healthy }
+
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      sync-a: { condition: service_healthy }
+      sync-b: { condition: service_healthy }
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        # The browser reaches the sync nodes through the load balancer.
+        NEXT_PUBLIC_SYNC_WS_URL: ws://localhost:8080
+    environment:
+      # Server-side calls stay inside the compose network.
+      SYNC_HTTP_URL: http://nginx:80
+    ports:
+      - "3000:3000"
+    depends_on:
+      - nginx
+
+volumes:
+  pgdata:

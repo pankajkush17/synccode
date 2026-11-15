@@ -1,0 +1,12 @@
+node_modules
+dist
+.next
+.env
+.env.local
+*.tsbuildinfo
+coverage
+test-results
+playwright-report
+.DS_Store
+.playwright-mcp
+docs/guide/guide.html

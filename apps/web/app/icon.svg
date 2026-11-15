@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>SyncCode</title>
+  <rect width="32" height="32" rx="8" fill="#14152b"/>
+  <rect x="9" y="6" width="4" height="20" rx="2" fill="#8b7bff"/>
+  <rect x="19" y="6" width="4" height="20" rx="2" fill="#ff7a90"/>
+</svg>

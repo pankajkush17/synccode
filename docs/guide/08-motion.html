@@ -1,0 +1,103 @@
+<h1><span class="num">Part 8</span>The system in motion</h1>
+<p class="lead">Now that you know the pieces, here is what they do together in each situation, naming the class responsible at every step.</p>
+
+<h2>8.1 Creating a room</h2>
+<ol class="steps">
+  <li>You press <strong>Start a room</strong>. <code>StartRoomForm</code> sends <code>POST /api/rooms</code> to the web app's own server.</li>
+  <li><code>app/api/rooms/route.ts</code> validates the request and forwards it to the sync server's <code>POST /rooms</code>. The browser never talks HTTP to the sync server directly.</li>
+  <li><code>RoomsRoutes</code> asks <code>SlugGenerator</code> for a random slug and <code>TokenService</code> for a new token and its hash.</li>
+  <li><code>RoomRepository.create()</code> inserts the row. In the very rare case that the slug already exists, it retries with a new one.</li>
+  <li>The response <code>{ slug, editToken, language }</code> travels back. This is the only time the token ever leaves the server.</li>
+  <li>The browser navigates to <code>/r/&lt;slug&gt;#t=&lt;editToken&gt;</code>.</li>
+</ol>
+
+<h2>8.2 Joining a room: the handshake</h2>
+<figure>
+<svg viewBox="0 0 580 300" width="540">
+  <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>
+  <g font-size="12" font-weight="600" text-anchor="middle">
+    <rect x="20" y="4" width="110" height="26" rx="7" fill="#f1f1f5"/><text x="75" y="22">Browser</text>
+    <rect x="450" y="4" width="110" height="26" rx="7" fill="#f1f1f5"/><text x="505" y="22">Sync node</text>
+  </g>
+  <g stroke="#c9cad3" stroke-width="1.3" stroke-dasharray="3 4"><line x1="75" y1="30" x2="75" y2="296"/><line x1="505" y1="30" x2="505" y2="296"/></g>
+  <g stroke="#5b45f0" stroke-width="1.6" fill="none">
+    <line x1="81" y1="62" x2="499" y2="62" marker-end="url(#a5)"/>
+    <line x1="81" y1="100" x2="499" y2="100" marker-start="url(#a5)"/>
+    <line x1="81" y1="138" x2="499" y2="138" marker-end="url(#a5)"/>
+    <line x1="81" y1="176" x2="499" y2="176" marker-start="url(#a5)"/>
+    <line x1="81" y1="214" x2="499" y2="214" marker-start="url(#a5)"/>
+    <line x1="81" y1="252" x2="499" y2="252" marker-end="url(#a5)"/>
+  </g>
+  <line x1="81" y1="288" x2="499" y2="288" stroke="#0c8f6f" stroke-width="1.6" marker-end="url(#a5)" marker-start="url(#a5)"/>
+  <g font-size="11" text-anchor="middle">
+    <text x="290" y="55"><tspan font-family="Menlo, monospace">GET /ws/&lt;slug&gt;?t=&lt;token&gt;</tspan><tspan fill="#5b5e69" dx="8">ask to upgrade</tspan></text>
+    <text x="290" y="93"><tspan font-family="Menlo, monospace">AUTH_ACK</tspan><tspan fill="#5b5e69" dx="8">your permission, your roomRef, who is here</tspan></text>
+    <text x="290" y="131"><tspan font-family="Menlo, monospace">SYNC_STEP_1</tspan><tspan fill="#5b5e69" dx="8">my state vector</tspan></text>
+    <text x="290" y="169"><tspan font-family="Menlo, monospace">SYNC_STEP_2</tspan><tspan fill="#5b5e69" dx="8">what you are missing → editor appears</tspan></text>
+    <text x="290" y="207"><tspan font-family="Menlo, monospace">SYNC_STEP_1</tspan><tspan fill="#5b5e69" dx="8">the server's state vector (editors only)</tspan></text>
+    <text x="290" y="245"><tspan font-family="Menlo, monospace">SYNC_STEP_2</tspan><tspan fill="#5b5e69" dx="8">anything you typed while offline</tspan></text>
+    <text x="290" y="281"><tspan font-family="Menlo, monospace">UPDATE · AWARENESS</tspan><tspan fill="#5b5e69" dx="8">live, both directions</tspan></text>
+  </g>
+</svg>
+<figcaption>The same handshake happens on first connect and on every reconnect.</figcaption>
+</figure>
+<p>On the server side, the first line triggers this chain: <code>HttpServer</code> sees the upgrade request and passes it to <code>WebSocketGateway</code>, which calls <code>RoomManager.get(slug)</code> (loading the room from Postgres if needed), checks the token with <code>TokenService</code>, completes the upgrade, creates a <code>RoomSession</code>, and calls <code>room.attach(session)</code>, which sends <code>AUTH_ACK</code>.</p>
+<p>If the room does not exist or the token is wrong, the server still completes the WebSocket handshake and then closes it immediately with code 4404 or 4401. This looks odd but is necessary: browsers hide the reason when an upgrade is refused, so this is the only way the page can tell "give up" from "try again".</p>
+
+<h2>8.3 Typing</h2>
+<p>This is the journey from Part 1, with the classes filled in:</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:6%">#</th><th style="width:28%">Where</th><th>What happens</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Browser: <code>MonacoBinding</code></td><td>Keystroke becomes an insert on the Yjs text. The document emits an update.</td></tr>
+    <tr><td>2</td><td>Browser: <code>ConnectionManager</code></td><td>Sees the update, wraps it in a frame of type <code>UPDATE</code>, sends it.</td></tr>
+    <tr><td>3</td><td>Node A: <code>RoomSession</code></td><td>Decodes the frame, checks the socket has write permission, calls <code>room.applyRemoteUpdate(update, thisSession)</code>.</td></tr>
+    <tr><td>4</td><td>Node A: <code>Room</code></td><td>Applies it. The document's update event fires. Origin is a session, so the update joins the dirty set and a flush is scheduled.</td></tr>
+    <tr><td>5</td><td>Node A: <code>RoomBroadcaster</code></td><td>Sends it to every other local session, and publishes it to Redis through <code>RedisPubSub</code>.</td></tr>
+    <tr><td>6</td><td>Node B: <code>RedisPubSub</code></td><td>Receives the envelope, sees a foreign node id, hands it to the room.</td></tr>
+    <tr><td>7</td><td>Node B: <code>Room</code> + <code>RoomBroadcaster</code></td><td>Applies it with origin <code>REDIS</code>: sent to all local sockets, not published, not saved.</td></tr>
+    <tr><td>8</td><td>Friend's browser</td><td><code>ConnectionManager</code> applies it; <code>MonacoBinding</code> updates the editor.</td></tr>
+    <tr><td>9</td><td>Node A: <code>Room.flush()</code></td><td>Within 500 ms, one batched <code>INSERT</code> through <code>UpdateRepository</code>.</td></tr>
+  </tbody>
+</table>
+
+<h2>8.4 Cursors and presence</h2>
+<p>The same route, with awareness instead of the document. Moving your cursor updates your awareness entry; the browser sends an <code>AWARENESS</code> frame; the server applies it to the room's awareness object, forwards it to local sockets and publishes it on the room's awareness channel. Nothing is saved. When a socket closes, its <code>RoomSession</code> removes the entries that socket introduced, and that removal is broadcast, so your cursor disappears from every screen at once.</p>
+
+<h2>8.5 Losing the connection</h2>
+<ol class="steps">
+  <li>The socket closes. <code>ConnectionManager</code> switches to <code>RECONNECTING</code>; the amber banner appears.</li>
+  <li>The editor stays fully usable. Your keystrokes go into your local document as usual.</li>
+  <li><code>ExponentialBackoff</code> supplies the wait before each attempt: 0.5 s, 1 s, 2 s … up to 15 s. If the browser reports that the network is back, it retries at once.</li>
+  <li>On reconnect, the handshake from 8.2 runs again. The two state-vector exchanges deliver what you missed and upload what you typed. The banner disappears.</li>
+</ol>
+<p>If the server never told the browser it was closing (for example the wifi simply vanished), the browser may not notice for a long time. So the client also watches for silence: if no message at all has arrived for 20 seconds, it treats the connection as dead and starts reconnecting.</p>
+
+<h2>8.6 A second server joins in</h2>
+<p>Your friend's connection lands on node B, which has never seen this room. <code>RoomManager.load()</code> does three things in a deliberate order:</p>
+<ol class="steps">
+  <li><strong>Subscribe to the room's Redis channels first.</strong> From this moment node B will not miss anything new.</li>
+  <li><strong>Load from Postgres</strong> (snapshot, then updates).</li>
+  <li><strong>Publish a <code>sync-request</code></strong> containing its state vector. Node A, which holds the room, replies with whatever node B lacks, and with the current list of cursors.</li>
+</ol>
+<div class="box why"><b class="t">Why it is built this way</b>Node A saves edits at most 500 ms after they happen. So for up to half a second, an edit exists only in node A's memory. If node B loaded from Postgres alone, it would miss it. Step 3 closes that gap. The same message is sent again for every room if a server's Redis connection drops and comes back.</div>
+
+<h2>8.7 Idle rooms and restarts</h2>
+<p>When the last person leaves a room on a given server, that server starts a five-minute timer. If nobody returns, it saves anything unsaved, unsubscribes from the room's Redis channels and frees the memory. The next visitor, on any server, triggers a fresh load. This is what "stateless servers" means in practice: memory is only a cache of what Postgres holds.</p>
+<p>A restart is the same story for all rooms at once: <code>GracefulShutdown</code> saves everything, the process exits, browsers reconnect elsewhere.</p>
+
+<h2>8.8 What happens when things go wrong</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:30%">Situation</th><th>What the system does</th><th style="width:24%">Responsible</th></tr></thead>
+  <tbody>
+    <tr><td>Wifi drops</td><td>Keep editing locally; reconnect with growing delays; merge by state vector.</td><td><code>ConnectionManager</code></td></tr>
+    <tr><td>Server is redeployed</td><td>Save every room, close sockets politely, clients move to another server.</td><td><code>GracefulShutdown</code></td></tr>
+    <tr><td>Laptop goes to sleep</td><td>Unanswered ping; socket terminated; cursor removed for everyone.</td><td><code>HeartbeatManager</code></td></tr>
+    <tr><td>A client is too slow to receive</td><td>Disconnected once 4 MB is queued for it; catches up by diff later.</td><td><code>BackpressureGuard</code></td></tr>
+    <tr><td>The database write fails</td><td>Batch kept in order and retried; typing continues.</td><td><code>Room.flush()</code></td></tr>
+    <tr><td>Fifty people open a cold room at once</td><td>They share a single load from Postgres.</td><td><code>RoomManager</code></td></tr>
+    <tr><td>Someone sends garbage, or writes on a view-only link</td><td><code>ERROR</code> frame, closed with code 4400, document untouched.</td><td><code>RoomSession</code></td></tr>
+    <tr><td>Redis goes down</td><td>Servers stop hearing each other; nothing lost; resync on return.</td><td><code>RedisPubSub</code>, <code>RoomManager</code></td></tr>
+    <tr><td>A setting is missing at start-up</td><td>Server refuses to start and names the variable.</td><td><code>Config</code></td></tr>
+  </tbody>
+</table>

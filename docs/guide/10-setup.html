@@ -1,0 +1,114 @@
+<h1><span class="num">Part 10</span>Running it on your machine</h1>
+<p class="lead">A step-by-step checklist for this Mac. Your machine already has Node, pnpm, Postgres 14 and Redis installed through Homebrew, and the project's <code>.env</code> file is already written.</p>
+
+<h2>10.1 Check the prerequisites</h2>
+<pre>node -v            <span class="c"># needs v22 or newer            (you have v26)</span>
+pnpm -v            <span class="c"># any recent version            (you have v12)</span>
+psql --version     <span class="c"># Postgres 14 or newer          (you have 14)</span>
+redis-cli ping     <span class="c"># should print PONG</span></pre>
+<p>If any is missing: <code>brew install node pnpm postgresql@14 redis</code>.</p>
+
+<h2>10.2 Start the two services</h2>
+<pre>brew services start postgresql@14      <span class="c"># starts Postgres now and at every login</span>
+brew services start redis              <span class="c"># Redis (already running on your machine)</span>
+brew services list                     <span class="c"># both should say "started"</span></pre>
+
+<h2>10.3 Create the databases</h2>
+<pre>createdb synccode                      <span class="c"># the app's database</span>
+createdb synccode_test                 <span class="c"># a separate one for the tests</span></pre>
+<p>Homebrew's Postgres lets your macOS user connect without a password, which is why the connection address below contains no username or password.</p>
+
+<h2>10.4 Install the project's libraries</h2>
+<pre>cd ~/Documents/"Pankaj Personal"/syncCode
+pnpm install</pre>
+
+<h2>10.5 Check the settings file</h2>
+<p>The file <code>.env</code> in the project root already exists. It should contain:</p>
+<pre>DATABASE_URL=postgres://localhost:5432/synccode
+REDIS_URL=redis://localhost:6379
+EDIT_SECRET=<span class="c">&lt;64 hex characters, already generated for you&gt;</span>
+PORT=4000
+LOG_LEVEL=info
+ALLOWED_ORIGINS=http://localhost:3000
+NEXT_PUBLIC_SYNC_WS_URL=ws://localhost:4000
+SYNC_HTTP_URL=http://localhost:4000</pre>
+<p>If you ever need a new secret: <code>openssl rand -hex 32</code>. Changing it invalidates the edit links of existing rooms.</p>
+
+<h2>10.6 Create the tables</h2>
+<pre>pnpm db:migrate                        <span class="c"># prints "migrations applied"</span></pre>
+
+<h2>10.7 Start everything</h2>
+<pre>pnpm dev</pre>
+<p>This starts the sync server on port 4000 and the website on port 3000. Leave the terminal open. Then visit:</p>
+<table class="wrapfirst">
+  <thead><tr><th style="width:40%">Address</th><th>What it is</th></tr></thead>
+  <tbody>
+    <tr><td><code>http://localhost:3000</code></td><td>The landing page</td></tr>
+    <tr><td><code>http://localhost:3000/engineering</code></td><td>The visual explanation of the backend</td></tr>
+    <tr><td><code>http://localhost:4000/readyz</code></td><td>The sync server's health check</td></tr>
+  </tbody>
+</table>
+<p>Press Ctrl-C in the terminal to stop both.</p>
+
+<h2>10.8 Things to try, in order</h2>
+<ol class="steps">
+  <li><strong>Two people.</strong> Start a room. Copy the address into a private window. Type in both.</li>
+  <li><strong>View only.</strong> Press Share, choose "View only", open that link in a third window. Try to type there.</li>
+  <li><strong>Reconnection.</strong> Stop the server (Ctrl-C). The amber banner appears; keep typing. Start it again with <code>pnpm dev</code>. Your text is saved.</li>
+  <li><strong>Persistence.</strong> Close every window. Reopen the room's link. The text is still there. Find it in the database with the queries from section 7.7.</li>
+  <li><strong>Watch the wire.</strong> Run <code>redis-cli psubscribe 'room:*'</code> and type.</li>
+  <li><strong>Two servers.</strong> In two terminals:
+<pre>PORT=4000 NODE_NAME=sync-a pnpm dev:sync
+PORT=4001 NODE_NAME=sync-b pnpm dev:sync</pre>
+  Then, in a third: <code>SYNC_URLS=ws://localhost:4000,ws://localhost:4001 pnpm load-test</code>. It reports the delivery times and whether all fifty copies converged.</li>
+  <li><strong>Seed some rooms.</strong> <code>pnpm seed</code> prints links to three rooms with code already in them.</li>
+</ol>
+
+<h2>10.9 Run the tests</h2>
+<pre>export TEST_DATABASE_URL=postgres://localhost:5432/synccode_test
+export TEST_REDIS_URL=redis://localhost:6379
+
+pnpm test            <span class="c"># 107 unit, integration and two-server tests</span>
+pnpm lint            <span class="c"># code style</span>
+pnpm typecheck       <span class="c"># TypeScript</span></pre>
+<p>For the browser tests, keep <code>pnpm dev</code> running in one terminal and, in another:</p>
+<pre>pnpm --filter @synccode/web exec playwright install chromium    <span class="c"># once</span>
+pnpm test:e2e</pre>
+<p>If you leave out the two <code>TEST_…</code> variables, the tests try to start their own Postgres and Redis in Docker instead, which needs Docker Desktop to be running.</p>
+
+<h2>10.10 The Docker alternative</h2>
+<p>If Docker Desktop is running, one command starts the whole multi-server setup without using your local Postgres or Redis:</p>
+<pre>docker compose -f docker/docker-compose.yml up --build</pre>
+<p>Then open <code>http://localhost:3000</code>. This path was written but not run on this machine, because Docker was not running when the project was built.</p>
+
+<h2>10.11 Everyday commands</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:34%">Command</th><th>Use</th></tr></thead>
+  <tbody>
+    <tr><td><code>pnpm dev</code></td><td>Run server and website with auto-reload</td></tr>
+    <tr><td><code>pnpm dev:sync</code> / <code>pnpm dev:web</code></td><td>Run only one of them</td></tr>
+    <tr><td><code>pnpm build</code></td><td>Production build of everything</td></tr>
+    <tr><td><code>pnpm test</code> / <code>pnpm test:e2e</code></td><td>Tests</td></tr>
+    <tr><td><code>pnpm lint</code> / <code>pnpm format</code></td><td>Check / fix code style</td></tr>
+    <tr><td><code>pnpm db:migrate</code></td><td>Apply database migrations</td></tr>
+    <tr><td><code>pnpm db:generate</code></td><td>Create a migration after changing the schema</td></tr>
+    <tr><td><code>pnpm seed</code> / <code>pnpm compact</code> / <code>pnpm load-test</code></td><td>The helper scripts</td></tr>
+  </tbody>
+</table>
+
+<h2>10.12 Troubleshooting</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:38%">Symptom</th><th>Cause and fix</th></tr></thead>
+  <tbody>
+    <tr><td><code>cannot reach Postgres</code> or <code>ECONNREFUSED …:5432</code></td><td>Postgres is not running. <code>brew services start postgresql@14</code>.</td></tr>
+    <tr><td><code>database "synccode" does not exist</code></td><td>Run <code>createdb synccode</code>, then <code>pnpm db:migrate</code>.</td></tr>
+    <tr><td><code>relation "rooms" does not exist</code></td><td>Tables not created yet. <code>pnpm db:migrate</code>.</td></tr>
+    <tr><td><code>Invalid configuration: EDIT_SECRET…</code></td><td>The secret must be exactly 64 hex characters. Generate one with <code>openssl rand -hex 32</code>.</td></tr>
+    <tr><td><code>ECONNREFUSED …:6379</code></td><td>Redis is not running. <code>brew services start redis</code>.</td></tr>
+    <tr><td><code>EADDRINUSE :::4000</code> (or 3000)</td><td>Something is already using the port. Find it with <code>lsof -i :4000</code> and stop it, or stop an earlier <code>pnpm dev</code>.</td></tr>
+    <tr><td>"Could not start a room" on the landing page</td><td>The sync server is not running or not reachable. Check <code>curl localhost:4000/readyz</code>.</td></tr>
+    <tr><td>Editor shows "This edit link is not valid"</td><td>The room was created with a different <code>EDIT_SECRET</code>. Start a new room.</td></tr>
+    <tr><td>Stuck on "Joining room"</td><td>The page loaded but the WebSocket cannot connect. Check the sync server is up and <code>NEXT_PUBLIC_SYNC_WS_URL</code> is correct.</td></tr>
+    <tr><td>Playwright: "Executable doesn't exist"</td><td>Install the test browser: <code>pnpm --filter @synccode/web exec playwright install chromium</code>.</td></tr>
+  </tbody>
+</table>

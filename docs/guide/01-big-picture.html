@@ -1,0 +1,84 @@
+<h1><span class="num">Part 1</span>The big picture</h1>
+<p class="lead">SyncCode is a code editor that several people can type into at the same time, from different computers, and all see the same text and each other's cursors, instantly.</p>
+
+<h2>1.1 What a user sees</h2>
+<ol>
+  <li>You open the website and press <strong>Start a room</strong>.</li>
+  <li>You land in an empty code editor. The address bar holds a long link.</li>
+  <li>You send that link to a friend. They open it and appear in the corner as a coloured circle.</li>
+  <li>You both type. Each of you sees the other's text appear character by character, and a coloured cursor with their name.</li>
+  <li>If your wifi drops, you keep typing. When it returns, your changes and theirs are merged.</li>
+  <li>If you share the link <em>without</em> its last part, the other person can watch but cannot type.</li>
+</ol>
+<p>There are no accounts and nothing to install. That is the whole product. Everything else in this guide explains how those six lines are made true.</p>
+
+<h2>1.2 Why this is hard</h2>
+<p>A normal website works like a letter: you send a request, the server sends a reply, done. A shared editor breaks that model in three ways.</p>
+<h3>Problem 1: the server must talk first</h3>
+<p>When your friend types, <em>your</em> browser must be told, even though you did not ask anything. Request-and-reply cannot do that. We need a connection that stays open in both directions.</p>
+<h3>Problem 2: two people can edit the same spot</h3>
+<p>Imagine the text is <code>AB</code>. You insert <code>x</code> between A and B. At the same instant, your friend inserts <code>y</code> between A and B. Each of you already sees your own change on screen. What should the final text be, <code>AxyB</code> or <code>AyxB</code>? Either is fine, but <strong>both screens must agree</strong>, and neither keystroke may be lost. Messages cross on the network, arrive late, or arrive twice. Getting every copy to agree anyway is the central problem.</p>
+<h3>Problem 3: one server is not enough</h3>
+<p>A real service runs several copies of its server program, so it can survive a crash and handle more users. But if you are connected to server A and your friend to server B, how does your keystroke get to them?</p>
+
+<h2>1.3 The five ideas that solve it</h2>
+<table class="wrapfirst">
+  <thead><tr><th style="width:26%">Idea</th><th>What it solves</th><th style="width:22%">Technology</th></tr></thead>
+  <tbody>
+    <tr><td><strong>An always-open, two-way connection</strong></td><td>The server can push your friend's keystroke to you the moment it happens.</td><td>WebSocket</td></tr>
+    <tr><td><strong>A document that merges itself</strong></td><td>Edits are designed so that applying them in any order gives the same result on every machine. Nobody has to referee.</td><td>CRDT (the Yjs library)</td></tr>
+    <tr><td><strong>A shared announcement channel</strong></td><td>Every server announces the edits it receives; the other servers listen and pass them to their own users.</td><td>Redis pub/sub</td></tr>
+    <tr><td><strong>A diary plus an occasional summary</strong></td><td>Every edit is appended to a log in the database. Now and then the log is folded into one snapshot, so loading stays fast.</td><td>Postgres</td></tr>
+    <tr><td><strong>The link is the key</strong></td><td>Permission to edit is a secret inside the link itself, so no accounts are needed.</td><td>HMAC tokens</td></tr>
+  </tbody>
+</table>
+
+<h2>1.4 The architecture in one picture</h2>
+<figure>
+<svg viewBox="0 0 700 330" width="660">
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#5b5e69"/></marker></defs>
+  <g fill="none" stroke="#5b5e69" stroke-width="1.4" marker-end="url(#a1)" marker-start="url(#a1)">
+    <path d="M115 68V118"/><path d="M585 68V118"/><path d="M200 146H290"/><path d="M500 146H410"/>
+  </g>
+  <g fill="none" stroke="#5b5e69" stroke-width="1.4" marker-end="url(#a1)">
+    <path d="M115 174V272H290"/><path d="M585 174V272H410"/><path d="M290 68L204 116" stroke-dasharray="4 3"/>
+  </g>
+  <g font-size="12.5" font-weight="600" text-anchor="middle">
+    <rect x="30" y="20" width="170" height="48" rx="9" fill="#ece9ff" stroke="#8b7bff" stroke-width="1.4"/><text x="115" y="41">Your browser</text><text x="115" y="57" font-size="10" font-weight="400" fill="#5b5e69">editor + a copy of the document</text>
+    <rect x="500" y="20" width="170" height="48" rx="9" fill="#ffe9ed" stroke="#ff7a90" stroke-width="1.4"/><text x="585" y="41">Friend's browser</text><text x="585" y="57" font-size="10" font-weight="400" fill="#5b5e69">editor + a copy of the document</text>
+    <rect x="270" y="20" width="160" height="48" rx="9" fill="#f6f6f9" stroke="#b9bbc6" stroke-width="1.4"/><text x="350" y="41">Web app (Next.js)</text><text x="350" y="57" font-size="10" font-weight="400" fill="#5b5e69">serves the pages</text>
+    <rect x="30" y="118" width="170" height="56" rx="9" fill="#f6f6f9" stroke="#15161c" stroke-width="1.4"/><text x="115" y="142">Sync node A</text><text x="115" y="159" font-size="10" font-weight="400" fill="#5b5e69">holds rooms in memory</text>
+    <rect x="500" y="118" width="170" height="56" rx="9" fill="#f6f6f9" stroke="#15161c" stroke-width="1.4"/><text x="585" y="142">Sync node B</text><text x="585" y="159" font-size="10" font-weight="400" fill="#5b5e69">holds rooms in memory</text>
+    <rect x="290" y="118" width="120" height="56" rx="9" fill="#fff6ec" stroke="#c2570c" stroke-width="1.4"/><text x="350" y="142">Redis</text><text x="350" y="159" font-size="10" font-weight="400" fill="#5b5e69">announcements</text>
+    <rect x="290" y="244" width="120" height="56" rx="9" fill="#eefaf6" stroke="#0c8f6f" stroke-width="1.4"/><text x="350" y="268">Postgres</text><text x="350" y="285" font-size="10" font-weight="400" fill="#5b5e69">permanent storage</text>
+  </g>
+  <g font-size="10" fill="#5b5e69">
+    <text x="122" y="97">WebSocket</text><text x="592" y="97">WebSocket</text>
+    <text x="245" y="139" text-anchor="middle">publish</text><text x="455" y="139" text-anchor="middle">subscribe</text>
+    <text x="122" y="228">save edits</text><text x="578" y="228" text-anchor="end">save edits</text>
+    <text x="262" y="100">create room</text>
+  </g>
+</svg>
+<figcaption>Two browsers, connected to two different servers, editing one document.</figcaption>
+</figure>
+<p>There are four kinds of program running:</p>
+<ul>
+  <li><strong>The web app</strong> (<code>apps/web</code>) serves the pages: the landing page, the editor page, the engineering page. It runs in the browser and, for a few things, on a small server of its own.</li>
+  <li><strong>Sync nodes</strong> (<code>apps/sync</code>) are the heart. Each one accepts WebSocket connections, keeps the documents people are currently editing in memory, and passes edits around. You can run one or many; they are identical.</li>
+  <li><strong>Redis</strong> is a tiny, very fast message board. Sync nodes use it only to tell each other "this room just changed". Nothing is stored there.</li>
+  <li><strong>Postgres</strong> is the database. It is the only place where documents live permanently.</li>
+</ul>
+
+<h2>1.5 One keystroke, end to end</h2>
+<p>You are connected to node A. Your friend is connected to node B. You press <code>x</code>.</p>
+<ol class="steps">
+  <li><strong>Your editor records the change.</strong> The editor (Monaco) is bound to a Yjs document living in your browser. Yjs produces a tiny binary description of the change, about 20 bytes, called an <em>update</em>.</li>
+  <li><strong>The update travels to node A.</strong> Your browser puts a 3-byte header in front of it and sends it down the open WebSocket.</li>
+  <li><strong>Node A applies it.</strong> Node A has its own copy of the document in memory. It applies the update, and puts it on a list of things to save.</li>
+  <li><strong>Node A announces it.</strong> It publishes the update on the room's Redis channel, stamped with node A's own id.</li>
+  <li><strong>Redis delivers it to every node holding that room</strong>, including back to node A. Node A sees its own stamp and ignores it.</li>
+  <li><strong>Node B applies it and sends it to your friend.</strong> Your friend's browser applies the update; the <code>x</code> appears on their screen.</li>
+  <li><strong>Within half a second, node A saves it.</strong> All the updates collected in the last 500 ms are written to Postgres in one go.</li>
+</ol>
+<p>Measured on a laptop with 50 simulated users spread over two nodes, steps 1 to 6 take a median of 1.7 milliseconds.</p>
+<div class="box"><b class="t">In plain words</b>Every browser and every server holds its own copy of the document. An edit is a small note saying "I inserted this, right after that". Notes are passed along until everyone has them. Because of how the notes are designed, everyone who has the same set of notes has the same document.</div>

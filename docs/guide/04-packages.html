@@ -1,0 +1,76 @@
+<h1><span class="num">Part 4</span>The shared packages</h1>
+<p class="lead">Two small packages hold the things more than one program must agree on: the message format, and the shape of the database.</p>
+
+<h2>4.1 <code>packages/shared</code>: the contract</h2>
+<pre class="tree">packages/shared/src/
+├── protocol/
+│   ├── MessageType.ts     <span class="c">the eight kinds of message, as numbers 0–7</span>
+│   ├── Codec.ts           <span class="c">turns (type, roomRef, payload) into bytes and back</span>
+│   └── MessageSchema.ts   <span class="c">shapes of the small control messages + close codes</span>
+├── auth/
+│   └── TokenShape.ts      <span class="c">what an edit token looks like (types and a pattern only)</span>
+├── color/
+│   └── ColorPalette.ts    <span class="c">picks a cursor colour from an id, the same everywhere</span>
+├── rooms/
+│   ├── Languages.ts       <span class="c">the 16 supported languages</span>
+│   └── RoomSchema.ts      <span class="c">room ids, API request/response shapes, document key names</span>
+└── index.ts               <span class="c">re-exports everything above</span></pre>
+
+<h3><code>MessageType.ts</code></h3>
+<p>An <code>enum</code> giving each kind of message a number. That number is the first byte of every frame on the wire.</p>
+<table>
+  <thead><tr><th>Number</th><th>Name</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td><code>SYNC_STEP_1</code></td><td>"Here is my state vector."</td></tr>
+    <tr><td>1</td><td><code>SYNC_STEP_2</code></td><td>"Here is what you were missing."</td></tr>
+    <tr><td>2</td><td><code>UPDATE</code></td><td>"A new edit just happened."</td></tr>
+    <tr><td>3</td><td><code>AWARENESS</code></td><td>"Someone's cursor or presence changed."</td></tr>
+    <tr><td>4</td><td><code>AUTH_ACK</code></td><td>Server to client: "you are in; here is your permission."</td></tr>
+    <tr><td>5</td><td><code>ERROR</code></td><td>Server to client: "that was not allowed", sent just before closing.</td></tr>
+    <tr><td>6 / 7</td><td><code>PING</code> / <code>PONG</code></td><td>Client measures the round-trip time.</td></tr>
+  </tbody>
+</table>
+
+<h3><code>Codec.ts</code></h3>
+<p>A class with two methods, <code>encode</code> and <code>decode</code>. Every message is laid out like this:</p>
+<figure>
+<svg viewBox="0 0 600 70" width="540">
+  <g font-size="12" text-anchor="middle">
+    <rect x="1" y="6" width="90" height="44" fill="#f6f6f9" stroke="#15161c" stroke-width="1.2"/><text x="46" y="26" font-weight="600">type</text><text x="46" y="42" font-size="10" fill="#5b5e69">1 byte</text>
+    <rect x="91" y="6" width="150" height="44" fill="#f6f6f9" stroke="#15161c" stroke-width="1.2"/><text x="166" y="26" font-weight="600">roomRef</text><text x="166" y="42" font-size="10" fill="#5b5e69">2 bytes</text>
+    <rect x="241" y="6" width="358" height="44" fill="#ece9ff" stroke="#15161c" stroke-width="1.2"/><text x="420" y="26" font-weight="600">payload</text><text x="420" y="42" font-size="10" fill="#5b5e69">N bytes: a Yjs update, a state vector, or an awareness blob</text>
+  </g>
+</svg>
+<figcaption>The frame: a 3-byte header, then the payload untouched.</figcaption>
+</figure>
+<p><code>roomRef</code> is a small number the server hands to each connection when it joins. It saves sending the room's 10-character id with every keystroke. <code>decode</code> rejects anything shorter than 3 bytes or with an unknown type.</p>
+
+<h3><code>MessageSchema.ts</code></h3>
+<p>Two of the message types carry a tiny JSON object instead of raw bytes. Zod schemas describe them, and the <code>ControlPayload</code> class converts them to and from bytes:</p>
+<pre>AUTH_ACK   { permission: "read" | "write", nodeId: "sync-a" }
+ERROR      { kind: "protocol", message: "write on read-only socket" }</pre>
+<p>It also defines the <strong>close codes</strong>, the number a WebSocket carries when it closes. Codes 4400, 4401 and 4404 mean "do not bother reconnecting" (protocol violation, bad token, no such room). Anything else means "try again".</p>
+
+<h3><code>TokenShape.ts</code>, <code>ColorPalette.ts</code>, <code>Languages.ts</code>, <code>RoomSchema.ts</code></h3>
+<ul>
+  <li><strong>TokenShape</strong>: an edit token is exactly 43 URL-safe characters. Only the <em>shape</em> lives here. The code that creates and checks tokens stays on the server, so the browser can never forge one.</li>
+  <li><strong>ColorPalette</strong>: eight colours and a small hash function. Give it any id and it always returns the same colour, so everyone sees a given person in the same colour without coordinating.</li>
+  <li><strong>Languages</strong>: the list shown in the language picker, plus <code>isLanguageId()</code> to check a value is one of them.</li>
+  <li><strong>RoomSchema</strong>: a room id (slug) is 10 lowercase letters or digits. This file also defines the shapes of the HTTP API (<code>CreateRoomRequest</code>, <code>CreateRoomResponse</code>, <code>RoomMeta</code>) and <code>DocKeys</code>, the names used inside every Yjs document: <code>content</code> for the text and <code>meta</code> for the room's language and title.</li>
+</ul>
+
+<h2>4.2 <code>packages/db</code>: the database definition</h2>
+<pre class="tree">packages/db/
+├── schema/
+│   ├── bytea.ts               <span class="c">teaches Drizzle about Postgres's binary column type</span>
+│   ├── rooms.ts               <span class="c">table: rooms</span>
+│   ├── documentUpdates.ts     <span class="c">table: document_updates</span>
+│   ├── documentSnapshots.ts   <span class="c">table: document_snapshots</span>
+│   └── index.ts
+├── migrations/
+│   └── 0000_cute_killraven.sql   <span class="c">the SQL that creates the three tables</span>
+├── drizzle.config.ts          <span class="c">settings for the migration generator</span>
+├── migrate.ts                 <span class="c">small program: apply pending migrations</span>
+└── index.ts                   <span class="c">createDb(url) and runMigrations(url)</span></pre>
+<p>Each schema file describes one table in TypeScript. From those descriptions Drizzle does two things: it <em>generates the SQL</em> that creates the tables (a "migration"), and it gives the rest of the code <em>typed</em> queries, so a typo in a column name is a compile error rather than a runtime crash.</p>
+<p><code>index.ts</code> exports <code>createDb(url)</code>, which opens a pool of connections to Postgres, and <code>runMigrations(url)</code>, which applies any migration not yet applied. Part 7 covers the tables themselves in detail.</p>
