@@ -24,6 +24,21 @@ describe('Config', () => {
     expect(config.allowedOrigins).toEqual(['http://a.dev', 'https://b.dev'])
   })
 
+  it('keeps the self-ping off unless a public URL is known', () => {
+    expect(Config.fromEnv(valid).keepAliveUrl).toBeNull()
+    expect(
+      Config.fromEnv({ ...valid, RENDER_EXTERNAL_URL: 'https://x.onrender.com/' }).keepAliveUrl,
+    ).toBe('https://x.onrender.com/readyz')
+    expect(
+      Config.fromEnv({
+        ...valid,
+        RENDER_EXTERNAL_URL: 'https://x.onrender.com',
+        KEEPALIVE_URL: 'https://elsewhere.dev/ping',
+      }).keepAliveUrl,
+    ).toBe('https://elsewhere.dev/ping')
+    expect(Config.fromEnv(valid).keepAliveIntervalMs).toBe(600_000)
+  })
+
   it('fails fast, naming every missing variable', () => {
     try {
       Config.fromEnv({})

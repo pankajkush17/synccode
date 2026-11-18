@@ -6,6 +6,7 @@ import { MetricsRoutes } from './http/routes/MetricsRoutes'
 import { RoomsRoutes } from './http/routes/RoomsRoutes'
 import { NodeIdentity } from './identity/NodeIdentity'
 import { GracefulShutdown } from './lifecycle/GracefulShutdown'
+import { KeepAlive } from './lifecycle/KeepAlive'
 import { Logger } from './logging/Logger'
 import { MetricsRegistry } from './metrics/MetricsRegistry'
 import { CompactionJob } from './persistence/CompactionJob'
@@ -39,6 +40,7 @@ export class SyncServer {
   readonly shutdown: GracefulShutdown
 
   private readonly heartbeat: HeartbeatManager
+  private readonly keepAlive: KeepAlive
 
   constructor(private readonly config: Config) {
     this.identity = new NodeIdentity(undefined, config.nodeName)
@@ -127,9 +129,15 @@ export class SyncServer {
       this.logger.child({ component: 'http' }),
     )
 
+    this.keepAlive = new KeepAlive(
+      { url: config.keepAliveUrl, intervalMs: config.keepAliveIntervalMs },
+      this.logger.child({ component: 'keepalive' }),
+    )
+
     this.shutdown = new GracefulShutdown(this.http, this.roomManager, this.logger, {
       graceMs: config.shutdownGraceMs,
       before: [
+        { name: 'keepalive', run: () => this.keepAlive.stop() },
         { name: 'compaction', run: () => this.compaction.stop() },
         { name: 'heartbeat', run: () => this.heartbeat.stop() },
       ],
@@ -156,6 +164,7 @@ export class SyncServer {
     const port = await this.http.listen()
     this.heartbeat.start()
     this.compaction.start()
+    this.keepAlive.start()
     this.logger.info('sync node ready', { port, nodeId: this.identity.id })
     return port
   }

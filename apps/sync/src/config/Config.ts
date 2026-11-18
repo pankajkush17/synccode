@@ -39,6 +39,15 @@ const EnvSchema = z.object({
     .positive()
     .default(8 * 1024 * 1024),
   SHUTDOWN_GRACE_MS: z.coerce.number().int().positive().default(25_000),
+
+  // Self-ping to stop free hosts from sleeping. Render sets RENDER_EXTERNAL_URL itself.
+  KEEPALIVE_URL: z.string().url().optional(),
+  RENDER_EXTERNAL_URL: z.string().url().optional(),
+  KEEPALIVE_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 60_000),
 })
 
 export type ParsedEnv = z.infer<typeof EnvSchema>
@@ -128,5 +137,17 @@ export class Config {
   }
   get shutdownGraceMs(): number {
     return this.values.SHUTDOWN_GRACE_MS
+  }
+  /**
+   * `null` disables the self-ping (the default everywhere except Render).
+   * `/readyz` also pings Postgres and Redis, so idle free-tier databases stay active too.
+   */
+  get keepAliveUrl(): string | null {
+    if (this.values.KEEPALIVE_URL) return this.values.KEEPALIVE_URL
+    const external = this.values.RENDER_EXTERNAL_URL
+    return external ? `${external.replace(/\/$/, '')}/readyz` : null
+  }
+  get keepAliveIntervalMs(): number {
+    return this.values.KEEPALIVE_INTERVAL_MS
   }
 }
